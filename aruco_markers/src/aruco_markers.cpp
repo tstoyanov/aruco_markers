@@ -208,8 +208,8 @@ void ArucoMarkersNode::image_callback(const sensor_msgs::msg::Image::ConstShared
           }
           depth += depth_image_.at<float>(marker_center) / (n_corners+1);
           depth = depth/1000.;
-#endif
           std::cerr<<"Depth was "<<tvec[2]<<" now is "<<depth<<std::endl;
+#endif
 
           //compute new 3d position
           marker_transform.transform.translation.x = depth*tvec[0]/tvec[2];
