@@ -48,6 +48,7 @@ public:
 private:
   void log_marker_ids(const std::vector<int> & ids);
   void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
+  void depth_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
   void logCvMat(const cv::Mat & mat, const std::string & name);
   void logVec3d(const cv::Vec3d & vec, const std::string & name);
   void draw3dAxis(cv::Mat & Image, const cv::Vec3d & tvec, const cv::Vec3d & rvec, int lineSize);
@@ -58,8 +59,9 @@ private:
   rclcpp::Publisher<aruco_markers_msgs::msg::MarkerArray>::SharedPtr marker_array_pub_;
 
   // Image subscriber (using image_transport)
-  std::unique_ptr<image_transport::ImageTransport> it_;
+  std::unique_ptr<image_transport::ImageTransport> it_, dt_;
   image_transport::Subscriber image_subscriber_;
+  image_transport::Subscriber depth_subscriber_;
 
   // Camera info subscriber
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_subscriber_;
@@ -78,10 +80,14 @@ private:
   double marker_size_;
   std::string camera_frame_;
   std::string image_topic_;
+  std::string depth_topic_;
   std::string camera_info_topic_;
   std::string dictionary_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
+
+  bool has_depth_=false;
+  cv::Mat depth_image_;
 };
 
 #endif // ARUCO_MARKERS_HPP_

@@ -12,18 +12,21 @@ ArucoMarkersNode::ArucoMarkersNode()
   this->declare_parameter("image_topic", "camera/color/image_raw");
   this->declare_parameter("camera_info_topic", "camera/color/camera_info");
   this->declare_parameter("dictionary", "DICT_ARUCO_ORIGINAL");
+  this->declare_parameter("depth_topic", "");
 
   marker_size_ = this->get_parameter("marker_size").as_double();
   camera_frame_ = this->get_parameter("camera_frame").as_string();
   image_topic_ = this->get_parameter("image_topic").as_string();
   camera_info_topic_ = this->get_parameter("camera_info_topic").as_string();
   dictionary_ = this->get_parameter("dictionary").as_string();
+  depth_topic_ = this->get_parameter("depth_topic").as_string();
 
   RCLCPP_INFO(this->get_logger(), "marker_size: %f", marker_size_);
   RCLCPP_INFO(this->get_logger(), "camera_frame: %s", camera_frame_.c_str());
   RCLCPP_INFO(this->get_logger(), "image_topic: %s", image_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "camera_info_topic: %s", camera_info_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "dictionary: %s", dictionary_.c_str());
+  RCLCPP_INFO(this->get_logger(), "depth_topic: %s", depth_topic_.c_str());
 }
 
 void ArucoMarkersNode::initialize()
@@ -36,6 +39,13 @@ void ArucoMarkersNode::initialize()
     image_topic_, 1,
     std::bind(&ArucoMarkersNode::image_callback, this, std::placeholders::_1));
 
+  if(depth_topic_ != "") {
+    // Depth Image transport subscriber
+    dt_ = std::make_unique<image_transport::ImageTransport>(shared_from_this());
+    depth_subscriber_ = dt_->subscribe(
+        depth_topic_, 1,
+        std::bind(&ArucoMarkersNode::depth_callback, this, std::placeholders::_1));
+  }
   // Publisher for marker information
   marker_info_publisher_ = this->create_publisher<std_msgs::msg::String>("aruco_marker_info", 10);
   marker_array_pub_ = this->create_publisher<aruco_markers_msgs::msg::MarkerArray>(
@@ -99,6 +109,20 @@ void ArucoMarkersNode::log_marker_ids(const std::vector<int> & ids)
   RCLCPP_INFO(this->get_logger(), "marker ids: %s", ss.str().c_str());
 }
 
+void ArucoMarkersNode::depth_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg)
+{
+  try {
+    // Convert ROS image message to OpenCV image
+    cv_bridge::CvImagePtr cv_image_ptr = cv_bridge::toCvCopy(
+      msg,
+      sensor_msgs::image_encodings::TYPE_16UC1);
+    depth_image_ = cv_image_ptr->image.clone();
+    has_depth_ = true;
+  } catch (const cv_bridge::Exception & e) {
+    RCLCPP_ERROR(this->get_logger(), "CV Bridge exception: %s", e.what());
+  } 
+}
+
 void ArucoMarkersNode::image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg)
 {
   if (!received_camera_info_) {
@@ -155,6 +179,44 @@ void ArucoMarkersNode::image_callback(const sensor_msgs::msg::Image::ConstShared
         marker_transform.transform.translation.x = tvec[0];
         marker_transform.transform.translation.y = tvec[1];
         marker_transform.transform.translation.z = tvec[2];
+
+        //use latest depth image to correct 3D position
+        if(has_depth_) {
+          cv::Mat mask = cv::Mat::zeros(depth_image_.size(), CV_8UC1);
+          // Convert Point2f to Point (CV_32S)
+          std::vector<cv::Point> cornersInt;
+          for (const auto& point : marker_corners[i]) {
+            cornersInt.emplace_back(static_cast<int>(std::round(point.x)), static_cast<int>(std::round(point.y)));
+          }
+          cv::fillConvexPoly(mask, cornersInt, cv::Scalar(255));
+
+          // Compute the mean pixel value in the masked region
+          cv::Scalar meanValue = cv::mean(depth_image_, mask);
+
+          // Return the average pixel value (for 16-bit unsigned single-channel image)
+          float depth = static_cast<uint16_t>(meanValue[0]) / 1000.;
+#if 0
+          //calculate marker central pixel
+          cv::Point2f marker_center;
+          int n_corners = marker_corners[i].size();
+
+          for(int j=0; j<n_corners; j++) {
+            marker_center.x += marker_corners[i][j].x / n_corners;
+            marker_center.y += marker_corners[i][j].y / n_corners;
+            depth += depth_image_.at<uint16_t>(marker_corners[i][j].x) / (n_corners+1);
+            //std::cerr<<"Depth "<<depth_image_.at<float>(marker_corners[i][j].x)<<" as INT "<<depth_image_.at<uint16_t>(marker_corners[i][j].x)<<"\n";
+          }
+          depth += depth_image_.at<float>(marker_center) / (n_corners+1);
+          depth = depth/1000.;
+#endif
+          std::cerr<<"Depth was "<<tvec[2]<<" now is "<<depth<<std::endl;
+
+          //compute new 3d position
+          marker_transform.transform.translation.x = depth*tvec[0]/tvec[2];
+          marker_transform.transform.translation.y = depth*tvec[1]/tvec[2];
+          marker_transform.transform.translation.z = depth;
+
+        }
 
         tf2::Quaternion quaternion;
         cv::Mat rotation_matrix;
